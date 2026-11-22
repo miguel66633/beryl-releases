@@ -1,0 +1,57 @@
+name: Announce release on Discord
+
+# Posts a release to the Discord announcements channel as soon as it is published.
+#
+# Setup (once):
+#   1. Secret DISCORD_WEBHOOK_URL: the webhook of the announcements channel
+#      (Settings -> Secrets and variables -> Actions -> Secrets).
+#   2. Optional variable DISCORD_MENTION: "none" for no ping, or text such as "<@&ROLE_ID>".
+#      Empty or missing means "@everyone".
+#
+# To announce a release by hand (a test, or posting one again): Actions tab -> "Announce release on
+# Discord" -> Run workflow, with the release tag (empty = the latest release).
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag to announce, for example v1.1.0 (empty = the latest release)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    # Pre-releases are not announced; manual runs always are.
+    if: ${{ github.event_name == 'workflow_dispatch' || !github.event.release.prerelease }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          sparse-checkout: .github/scripts
+          persist-credentials: false
+
+      - name: Load the release (manual runs)
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag }}
+        run: gh release view ${TAG:+"$TAG"} --repo "$GITHUB_REPOSITORY" --json tagName,name,body,publishedAt,assets > "$RUNNER_TEMP/release.json"
+
+      # The release text goes in through env vars, never pasted into the shell command.
+      - name: Post to Discord
+        env:
+          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          MENTION: ${{ vars.DISCORD_MENTION }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: ${{ github.event.release.name }}
+          RELEASE_BODY: ${{ github.event.release.body }}
+          RELEASE_PUBLISHED_AT: ${{ github.event.release.published_at }}
+          RELEASE_ASSET_NAME: ${{ github.event.release.assets[0].name }}
+          RELEASE_JSON_FILE: ${{ runner.temp }}/release.json
+        run: node .github/scripts/discord-announce.mjs
